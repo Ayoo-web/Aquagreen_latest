@@ -255,7 +255,7 @@ export const AutomationTab: React.FC<AutomationTabProps> = ({
 
             {/* Gate 3 */}
             <div className="flex items-center gap-3 p-2 bg-slate-50 rounded-lg">
-              {!latestReading?.rainDetected || !automation.rainInhibitionEnabled ? (
+              {latestReading?.rainDetected === false || !automation.rainInhibitionEnabled ? (
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               ) : (
                 <XCircle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -263,7 +263,9 @@ export const AutomationTab: React.FC<AutomationTabProps> = ({
               <div className="flex-1">
                 <span className="font-semibold text-slate-900">3. Rain Inhibition Check:</span>
                 <span className="text-slate-600 ml-1">
-                  {!latestReading?.rainDetected
+                  {latestReading?.rainDetected == null
+                    ? 'Unavailable (rain status unknown)'
+                    : latestReading.rainDetected === false
                     ? 'Passed (Dry sensor surface)'
                     : automation.rainInhibitionEnabled
                     ? 'Blocked (Wet surface detected)'
@@ -278,7 +280,7 @@ export const AutomationTab: React.FC<AutomationTabProps> = ({
               <div className="flex-1">
                 <span className="font-semibold text-slate-900">4. Moisture Hysteresis Evaluation:</span>
                 <span className="text-slate-600 ml-1 font-mono">
-                  Current: {latestReading?.soilMoisturePercent}% · Trigger ON &le; {automation.dryThresholdPercent}% · Cutoff OFF &ge; {automation.targetWetPercent}%
+                  Current: {latestReading?.soilMoisturePercent == null ? 'Unavailable' : `${latestReading.soilMoisturePercent}%`} · Trigger ON &le; {automation.dryThresholdPercent}% · Cutoff OFF &ge; {automation.targetWetPercent}%
                 </span>
               </div>
             </div>

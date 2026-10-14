@@ -95,8 +95,32 @@ export function evaluateAutomationDecision(
     };
   }
 
+  // Do not infer dry soil or dry weather from unavailable/calibration-blocked values.
+  if (latestReading.soilMoisturePercent == null || !Number.isFinite(latestReading.soilMoisturePercent)) {
+    const pumpActive = latestReading.pumpState;
+    return {
+      action: pumpActive ? 'STOP_PUMP' : 'MAINTAIN_OFF',
+      stateLabel: 'Blocked by Unavailable Soil Data',
+      reason: 'Soil moisture percentage is unavailable. Automatic irrigation is held off until soil calibration/reading is valid.',
+      isPermitted: false,
+      activeFault: 'SOIL_MOISTURE_UNAVAILABLE'
+    };
+  }
+
+  // If rain inhibition is enabled, unknown rain status is not the same as dry weather.
+  if (automation.rainInhibitionEnabled && latestReading.rainDetected == null) {
+    const pumpActive = latestReading.pumpState;
+    return {
+      action: pumpActive ? 'STOP_PUMP' : 'MAINTAIN_OFF',
+      stateLabel: 'Blocked by Unavailable Rain Data',
+      reason: 'Rain sensor status is unavailable. The system will not assume dry weather.',
+      isPermitted: false,
+      activeFault: 'RAIN_SENSOR_UNAVAILABLE'
+    };
+  }
+
   // 3. Rain inhibition policy
-  if (automation.rainInhibitionEnabled && latestReading.rainDetected) {
+  if (automation.rainInhibitionEnabled && latestReading.rainDetected === true) {
     return {
       action: 'STOP_PUMP',
       stateLabel: 'Blocked by Rain Inhibit',

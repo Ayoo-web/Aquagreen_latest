@@ -12,7 +12,8 @@ export function calculateSoilMoisturePrediction(
 
   // Need at least 5 readings to establish a credible directional slope
   const validReadings = readings.filter(
-    r => !isNaN(r.soilMoisturePercent) && r.soilMoistureRaw < 4090 && r.soilMoistureRaw > 10
+    (r): r is SensorReading & { soilMoisturePercent: number } => r.soilMoisturePercent != null &&
+      Number.isFinite(r.soilMoisturePercent) && r.soilMoistureRaw < 4090 && r.soilMoistureRaw > 10
   );
 
   if (validReadings.length < 5) {

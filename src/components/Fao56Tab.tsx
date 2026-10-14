@@ -18,7 +18,7 @@ export const Fao56Tab: React.FC<Fao56TabProps> = ({
       <div className="p-8 text-center bg-white border border-slate-200 rounded-xl">
         <AlertCircle className="w-8 h-8 mx-auto text-amber-500 mb-2" />
         <h3 className="text-sm font-semibold text-slate-900">Calculation Engine Initializing</h3>
-        <p className="text-xs text-slate-500 mt-1">Collecting initial sensor series to compute FAO-56 Penman-Monteith.</p>
+        <p className="text-xs text-slate-500 mt-1">FAO-56 Penman–Monteith requires valid measured wind data. The calculation will remain unavailable until at least one valid wind-speed sample is received; no substitute wind speed is inserted.</p>
       </div>
     );
   }

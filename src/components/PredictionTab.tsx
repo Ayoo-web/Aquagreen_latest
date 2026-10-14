@@ -15,7 +15,9 @@ export const PredictionTab: React.FC<PredictionTabProps> = ({
   automation,
   calculation
 }) => {
-  const recentReadings = readings.slice(-15);
+  const recentReadings = readings.slice(-15).filter(
+    (r): r is SensorReading & { soilMoisturePercent: number } => r.soilMoisturePercent != null && Number.isFinite(r.soilMoisturePercent)
+  );
 
   return (
     <div className="space-y-6">
@@ -65,7 +67,7 @@ export const PredictionTab: React.FC<PredictionTabProps> = ({
         <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
           <div className="text-xs font-semibold text-slate-500 uppercase">Observed Moisture</div>
           <div className="text-3xl font-bold font-mono text-slate-900 mt-2 tabular-nums">
-            {prediction.currentMoisture}%
+            {prediction.isAvailable ? `${prediction.currentMoisture}%` : 'Unavailable'}
           </div>
           <div className="text-[11px] text-slate-500 mt-2 font-mono">
             Dry Trigger: {automation.dryThresholdPercent}%

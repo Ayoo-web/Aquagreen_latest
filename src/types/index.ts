@@ -4,11 +4,16 @@ export interface SensorReading {
   temperature: number; // °C
   humidity: number; // %
   soilMoistureRaw: number; // ADC 0 - 4095
-  soilMoisturePercent: number; // Calibrated 0 - 100%
+  soilMoisturePercent: number | null; // Calibrated 0 - 100%; null until calibrated/valid
   pressure: number; // hPa
-  windSpeed: number; // m/s
-  lux: number; // Illuminance in lux (NOT solar radiation)
-  rainDetected: boolean; // Rain surface wetness detector
+  windSpeed: number | null; // m/s; null when sensor unavailable/un calibrated
+  lux: number; // Illuminance in lux, not solar radiation
+  rainDetected: boolean | null; // null when unavailable/un calibrated
+  soilSensorOk?: boolean | null;
+  rainSensorOk?: boolean | null;
+  windSensorOk?: boolean | null;
+  windRaw?: number | null;
+  windVoltageV?: number | null;
   pumpState: boolean; // Reported state from controller (true = ON, false = OFF)
   supplyTankDistanceCm?: number | null; // HC-SR04 distance from sensor to supply-tank water surface
   supplyTankPercent?: number | null; // Calibrated fill percentage, 0-100

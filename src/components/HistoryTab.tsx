@@ -148,12 +148,14 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                     <td className="py-2.5 px-4 font-semibold text-slate-900">{r.temperature}°C</td>
                     <td className="py-2.5 px-4">{r.humidity}%</td>
                     <td className="py-2.5 px-4 text-slate-500">{r.soilMoistureRaw}</td>
-                    <td className="py-2.5 px-4 font-semibold text-blue-700">{r.soilMoisturePercent}%</td>
+                    <td className="py-2.5 px-4 font-semibold text-blue-700">{r.soilMoisturePercent == null ? '—' : `${Number(r.soilMoisturePercent).toFixed(1)}%`}</td>
                     <td className="py-2.5 px-4">{r.pressure}</td>
-                    <td className="py-2.5 px-4">{r.windSpeed}</td>
+                    <td className="py-2.5 px-4">{r.windSpeed == null ? '—' : Number(r.windSpeed).toFixed(2)}</td>
                     <td className="py-2.5 px-4 text-amber-700">{r.lux}</td>
                     <td className="py-2.5 px-4">
-                      {r.rainDetected ? (
+                      {r.rainDetected == null ? (
+                        <span className="text-slate-400">UNAVAILABLE</span>
+                      ) : r.rainDetected ? (
                         <span className="text-blue-600 font-semibold">WET</span>
                       ) : (
                         <span className="text-slate-400">DRY</span>

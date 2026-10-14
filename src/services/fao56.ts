@@ -150,7 +150,7 @@ export function calculateFAO56(
   calibration: CalibrationSettings,
   crop: CropSettings,
   targetDate: Date = new Date()
-): FAO56Calculation {
+): FAO56Calculation | null {
   const warnings: string[] = [];
   const limitations: string[] = [
     'Solar radiation (Rs) estimated via FAO-56 Hargreaves temperature-range method. The GY-302 sensor measures photometric illuminance (lux) which cannot be converted to radiometric energy (W/m² or MJ/m²) without spectral bias.',
@@ -158,8 +158,13 @@ export function calculateFAO56(
     'Daily soil heat flux (G) is assumed to be 0 MJ/m²/day in accordance with FAO-56 recommendations for 24-hour periods.'
   ];
 
-  // Filter readings for target date if available, or use recent readings
-  let validReadings = readings.filter(r => !isNaN(r.temperature) && !isNaN(r.humidity));
+  // FAO-56 Penman-Monteith requires wind speed. Do not replace unavailable wind
+  // with a plausible-looking default; only calculate from samples with a measured value.
+  const validReadings = readings.filter(
+    (r): r is SensorReading & { windSpeed: number } => Number.isFinite(r.temperature) &&
+      Number.isFinite(r.humidity) && r.windSpeed != null && Number.isFinite(r.windSpeed) && r.windSpeed >= 0
+  );
+  if (validReadings.length === 0) return null;
 
   let tMin: number;
   let tMax: number;
@@ -196,7 +201,7 @@ export function calculateFAO56(
     rhMean = latest.humidity;
     rhMin = Math.max(10, rhMean - 15);
     rhMax = Math.min(100, rhMean + 15);
-    rawWindSpeed = latest.windSpeed || 1.5;
+    rawWindSpeed = latest.windSpeed as number;
     warnings.push('Fewer than 8 hourly samples available for 24-hr dataset. Daily temperature range approximated from current reading.');
   } else {
     // Default fallback values
@@ -206,8 +211,7 @@ export function calculateFAO56(
     rhMean = 70.0;
     rhMin = 55.0;
     rhMax = 85.0;
-    rawWindSpeed = 1.8;
-    warnings.push('No sensor records in database. Calculation generated using regional default parameters.');
+    return null;
   }
 
   // 1. Vapor pressure values

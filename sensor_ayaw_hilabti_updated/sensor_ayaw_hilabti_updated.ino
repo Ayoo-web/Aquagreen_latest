@@ -9,7 +9,7 @@
  * - Relay GPIO17 is active-LOW and is driven OFF before other setup.
  * - HTTPS only; validates server certificates against trusted GTS Root R1 / ISRG Root X1 CAs.
  * - No fabricated fallback sensor readings are uploaded.
- * - Telemetry is withheld until cloud credentials and soil/rain/wind calibration are valid,
+ * - Telemetry requires cloud credentials and core climate readings; unavailable sensor values are sent as JSON null,
  *   and each required sensor reports a valid sample. This is intentional: the current API
  *   requires numeric sensor fields and otherwise cannot represent an unknown measurement.
  * - Remote commands are received only in successful telemetry responses.
@@ -300,9 +300,10 @@ bool collectionTankCalibrationValid() {
   return tankCalibrationValid(collectionTankEmptyDistanceCm, collectionTankFullDistanceCm);
 }
 
+// Cloud telemetry only requires valid cloud credentials. Individual sensor values
+// are uploaded as null when their measurement/calibration is unavailable.
 bool cloudConfigReady() {
-  return isHttpsUrlConfigured() && strlen(deviceToken) >= 32 &&
-         soilCalibrationValid() && rainCalibrationValid() && windCalibrationValid();
+  return isHttpsUrlConfigured() && strlen(deviceToken) >= 32;
 }
 
 bool localPumpConfigReady() {
@@ -323,7 +324,7 @@ void printConfigurationStatus() {
                 supplyTankCalibrationValid() ? "valid" : "NOT SET", supplyTankEmptyDistanceCm, supplyTankFullDistanceCm);
   Serial.printf("  Collection tank distance calibration: %s (empty=%.1f cm, full=%.1f cm)\n",
                 collectionTankCalibrationValid() ? "valid" : "NOT SET", collectionTankEmptyDistanceCm, collectionTankFullDistanceCm);
-  Serial.printf("  Cloud telemetry ready: %s\n", cloudConfigReady() ? "yes" : "NO - upload intentionally inhibited");
+  Serial.printf("  Cloud telemetry ready: %s\n", cloudConfigReady() ? "yes (invalid sensor fields will be null)" : "NO - HTTPS URL/device token required");
 }
 
 int parseIntField(const char* text) {
@@ -656,7 +657,10 @@ void sampleSensors() {
   // This firmware treats the installed wind sensor as an analog voltage output on GPIO32.
   // A zero/near-zero ADC reading is treated as a wiring/power fault until verified.
   sensors.windRaw = analogRead(WIND_ANALOG_PIN);
-  sensors.windVoltageV = analogReadMilliVolts(WIND_ANALOG_PIN) / 1000.0f;
+  // Work around a verified crash in analogReadMilliVolts() on this runtime.
+  // This is only a rough ADC-to-voltage estimate, NOT a calibrated voltage measurement.
+  // Do not treat calculated wind speed as research-quality until the wind sensor is calibrated.
+  sensors.windVoltageV = ((float)sensors.windRaw / 4095.0f) * 3.3f;
   sensors.windValid = windCalibrationValid() && sensors.windRaw >= 5 && sensors.windRaw < 4090 &&
                       finiteNumber(sensors.windVoltageV) && sensors.windVoltageV >= 0.0f &&
                       sensors.windVoltageV <= 3.3f;
@@ -686,10 +690,12 @@ void sampleSensors() {
   lastSensorSampleMs = millis();
 }
 
+// Climate readings are the minimum telemetry set for now. Soil/rain/wind and
+// tank values are sent independently and are explicitly null when unavailable.
 bool telemetrySampleValid() {
-  return sensors.dhtValid && sensors.pressureValid && sensors.luxValid && sensors.soilValid &&
-         sensors.rainValid && sensors.windValid && finiteNumber(sensors.soilPercent) &&
-         finiteNumber(sensors.windSpeedMs);
+  return sensors.dhtValid && sensors.pressureValid && sensors.luxValid &&
+         finiteNumber(sensors.temperatureC) && finiteNumber(sensors.humidityPct) &&
+         finiteNumber(sensors.pressureHpa) && finiteNumber(sensors.lux);
 }
 
 bool pumpStartSafetyReady() {
@@ -832,7 +838,7 @@ void uploadTelemetryAndPollCommands() {
   if (WiFi.status() != WL_CONNECTED) return;
   if (!cloudConfigReady()) {
     if (millis() - lastConfigWarningMs >= 15000UL) {
-      Serial.println("[DATA HOLD] Cloud upload disabled until HTTPS/token + soil/rain/wind calibration values are valid.");
+      Serial.println("[DATA HOLD] Telemetry needs a valid HTTPS API URL and device token.");
       printConfigurationStatus();
       lastConfigWarningMs = millis();
     }
@@ -840,30 +846,37 @@ void uploadTelemetryAndPollCommands() {
   }
   if (!telemetrySampleValid()) {
     if (millis() - lastSensorWarningMs >= 15000UL) {
-      Serial.print("[DATA HOLD] No fabricated values will be uploaded. Invalid: ");
+      Serial.print("[DATA HOLD] Required climate reading unavailable; upload skipped: ");
       if (!sensors.dhtValid) Serial.print("DHT22 ");
       if (!sensors.pressureValid) Serial.print("BMP280/pressure ");
       if (!sensors.luxValid) Serial.print("BH1750/lux ");
-      if (!sensors.soilValid) Serial.print("soil ADC/calibration ");
-      if (!sensors.rainValid) Serial.print("rain calibration ");
-      if (!sensors.windValid) Serial.print("wind voltage/calibration ");
       Serial.println();
       lastSensorWarningMs = millis();
     }
     return;
   }
 
-  StaticJsonDocument<768> doc;
+  // Missing/calibration-dependent readings are sent as JSON null, never as fake zeroes.
+  StaticJsonDocument<1024> doc;
   doc["temperature"] = sensors.temperatureC;
   doc["humidity"] = sensors.humidityPct;
   doc["soilMoistureRaw"] = sensors.soilRaw;
-  doc["soilMoisturePercent"] = sensors.soilPercent;
+  if (sensors.soilValid && finiteNumber(sensors.soilPercent)) doc["soilMoisturePercent"] = sensors.soilPercent;
+  else doc["soilMoisturePercent"] = nullptr;
+  doc["soilSensorOk"] = sensors.soilValid;
   doc["pressure"] = sensors.pressureHpa;
-  doc["windSpeed"] = sensors.windSpeedMs;
+  if (sensors.windValid && finiteNumber(sensors.windSpeedMs)) doc["windSpeed"] = sensors.windSpeedMs;
+  else doc["windSpeed"] = nullptr;
+  doc["windSensorOk"] = sensors.windValid;
+  doc["windRaw"] = sensors.windRaw;
+  if (finiteNumber(sensors.windVoltageV)) doc["windVoltageV"] = sensors.windVoltageV;
+  else doc["windVoltageV"] = nullptr;
   doc["lux"] = sensors.lux;
-  doc["rainDetected"] = sensors.rainDetected;
+  if (sensors.rainValid) doc["rainDetected"] = sensors.rainDetected;
+  else doc["rainDetected"] = nullptr;
+  doc["rainSensorOk"] = sensors.rainValid;
   doc["pumpState"] = pumpIsActive;
-  doc["isSoilFault"] = false;
+  doc["isSoilFault"] = !sensors.soilValid || sensors.soilRaw >= 4090;
   if (finiteNumber(sensors.supplyTankDistanceCm)) doc["supplyTankDistanceCm"] = sensors.supplyTankDistanceCm; else doc["supplyTankDistanceCm"] = nullptr;
   if (sensors.supplyTankPercentValid) doc["supplyTankPercent"] = sensors.supplyTankPercent; else doc["supplyTankPercent"] = nullptr;
   doc["supplyTankSensorOk"] = sensors.supplyTankEchoValid;
@@ -1018,7 +1031,7 @@ void setup() {
 
   printConfigurationStatus();
   Serial.println("[SERIAL] Commands: STATUS, CONFIG, ON, OFF, RESETSTOP, RESETWIFI");
-  Serial.println("[DATA QUALITY] Do not enable watering until soil/rain endpoints and wind calibration are measured.");
+  Serial.println("[DATA QUALITY] Invalid soil/rain/wind fields will upload as null; pump interlocks remain active until soil/rain checks are valid.");
 }
 
 // -------------------------------- Loop ----------------------------------

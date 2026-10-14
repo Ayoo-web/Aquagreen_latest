@@ -70,6 +70,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
   // Recent 24 readings for mini trend sparks
   const sparklineData = readings.slice(-24);
+  const soilSparklineData = sparklineData.filter(
+    (d): d is SensorReading & { soilMoisturePercent: number } => d.soilMoisturePercent != null && Number.isFinite(d.soilMoisturePercent)
+  );
+  const soilPercent = latestReading.soilMoisturePercent;
+  const soilPercentValid = soilPercent != null && Number.isFinite(soilPercent);
 
   return (
     <div className="space-y-6">
@@ -207,7 +212,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold font-mono text-slate-900 tabular-nums">
-              {latestReading.soilMoisturePercent}%
+              {soilPercentValid ? `${soilPercent!.toFixed(1)}%` : 'Unavailable'}
             </span>
             <span className="text-[11px] font-mono text-slate-400">
               ADC {latestReading.soilMoistureRaw}
@@ -221,13 +226,15 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
             <div
               className={`h-full transition-all duration-500 ${
-                latestReading.soilMoisturePercent <= automation.dryThresholdPercent
+                !soilPercentValid
+                  ? 'bg-slate-300'
+                  : soilPercent! <= automation.dryThresholdPercent
                   ? 'bg-rose-500'
-                  : latestReading.soilMoisturePercent >= automation.targetWetPercent
+                  : soilPercent! >= automation.targetWetPercent
                   ? 'bg-blue-600'
                   : 'bg-emerald-600'
               }`}
-              style={{ width: `${Math.min(100, Math.max(0, latestReading.soilMoisturePercent))}%` }}
+              style={{ width: `${soilPercentValid ? Math.min(100, Math.max(0, soilPercent!)) : 0}%` }}
             />
           </div>
           <div className="mt-2 text-[10px] text-slate-400">
@@ -303,12 +310,17 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
           <div className="flex items-baseline gap-1">
             <span className="text-2xl font-bold font-mono text-slate-900 tabular-nums">
-              {latestReading.windSpeed.toFixed(2)}
+              {latestReading.windSpeed == null || !Number.isFinite(latestReading.windSpeed) ? 'Unavailable' : latestReading.windSpeed.toFixed(2)}
             </span>
             <span className="text-xs font-mono text-slate-500">m/s</span>
           </div>
           <div className="mt-2 text-[11px] text-slate-500">
             Height {calibration.anemometerHeight}m · Adjusted u₂: {faoCalculation ? `${faoCalculation.windSpeed2m} m/s` : 'N/A'}
+          </div>
+          <div className="mt-1 text-[10px] text-slate-400">
+            {latestReading.windSpeed == null
+              ? `Wind sensor unavailable · raw ADC ${latestReading.windRaw ?? '—'} · estimated input ${(latestReading.windVoltageV ?? 0).toFixed(3)} V (uncalibrated)`
+              : 'Wind speed is a measured/calibrated value'}
           </div>
           <div className="mt-1 text-[10px] text-slate-400">
             FAO-56 2-meter log wind profile correction
@@ -342,8 +354,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             <CloudRain className="w-4 h-4 text-blue-500" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className={`text-2xl font-bold ${latestReading.rainDetected ? 'text-blue-600' : 'text-slate-900'}`}>
-              {latestReading.rainDetected ? 'Wet Surface' : 'Dry Surface'}
+            <span className={`text-2xl font-bold ${latestReading.rainDetected === true ? 'text-blue-600' : latestReading.rainDetected == null ? 'text-slate-400' : 'text-slate-900'}`}>
+              {latestReading.rainDetected == null ? 'Unavailable' : latestReading.rainDetected ? 'Wet Surface' : 'Dry Surface'}
             </span>
           </div>
           <div className="mt-2 text-[11px] text-slate-500">
@@ -438,14 +450,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               />
 
               {/* Data polyline */}
-              {sparklineData.length > 1 && (
+              {soilSparklineData.length > 1 && (
                 <polyline
                   fill="none"
                   stroke="#2563EB"
                   strokeWidth="2.5"
-                  points={sparklineData
+                  points={soilSparklineData
                     .map((d, index) => {
-                      const x = (index / (sparklineData.length - 1)) * 500;
+                      const x = (index / (soilSparklineData.length - 1)) * 500;
                       const y = 150 - (Math.min(100, Math.max(0, d.soilMoisturePercent)) / 100) * 150;
                       return `${x},${y}`;
                     })
@@ -454,10 +466,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               )}
 
               {/* End circle */}
-              {sparklineData.length > 0 && (
+              {soilSparklineData.length > 0 && (
                 <circle
                   cx="500"
-                  cy={150 - (Math.min(100, Math.max(0, sparklineData[sparklineData.length - 1].soilMoisturePercent)) / 100) * 150}
+                  cy={150 - (Math.min(100, Math.max(0, soilSparklineData[soilSparklineData.length - 1].soilMoisturePercent!)) / 100) * 150}
                   r="4"
                   fill="#2563EB"
                 />
@@ -466,7 +478,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
           <div className="flex justify-between text-[11px] text-slate-400 font-mono mt-2 pt-2 border-t border-slate-100">
             <span>24 hours ago</span>
-            <span>Current: {latestReading.soilMoisturePercent}%</span>
+            <span>Current: {soilPercentValid ? `${soilPercent!.toFixed(1)}%` : 'Unavailable'}</span>
           </div>
         </div>
 

@@ -118,13 +118,18 @@ class PhysicalTelemetryPayload(BaseModel):
     temperature: float = Field(..., description="Air Temperature in °C")
     humidity: float = Field(..., description="Relative Humidity in %")
     soilMoistureRaw: int = Field(..., description="Raw ADC value (0-4095)")
-    soilMoisturePercent: Optional[float] = Field(None, description="Calibrated moisture percentage")
+    soilMoisturePercent: Optional[float] = Field(None, ge=0, le=100, description="Calibrated moisture percentage; null when uncalibrated/invalid")
     pressure: float = Field(..., description="Barometric pressure in hPa")
-    windSpeed: float = Field(..., description="Wind speed in m/s")
+    windSpeed: Optional[float] = Field(None, ge=0, le=75, description="Wind speed in m/s; null when unavailable or uncalibrated")
     lux: float = Field(..., description="Illuminance in lux (NOT solar radiation)")
-    rainDetected: bool = Field(..., description="Rain sensor surface wetness indicator")
+    rainDetected: Optional[bool] = Field(None, description="Rain sensor wetness indicator; null when unavailable or uncalibrated")
     pumpState: bool = Field(..., description="Reported relay state from ESP32")
     isSoilFault: Optional[bool] = False
+    soilSensorOk: Optional[bool] = None
+    rainSensorOk: Optional[bool] = None
+    windSensorOk: Optional[bool] = None
+    windRaw: Optional[int] = Field(None, ge=0, le=4095)
+    windVoltageV: Optional[float] = Field(None, ge=0, le=3.3)
     rtcTimestamp: Optional[str] = Field(None, description="Optional DS1302 RTC ISO timestamp")
     timestamp: Optional[str] = Field(None, description="Optional timestamp")
     supplyTankDistanceCm: Optional[float] = Field(None, ge=2, le=400)
@@ -275,28 +280,36 @@ def receive_telemetry(payload: PhysicalTelemetryPayload, _auth=Depends(verify_de
                     category="WATER_TANK"
                 )
 
-        # 1. Safety Checks: Open-circuit probe check (ADC 4095)
-        if data_dict.get("soilMoistureRaw", 0) >= 4090:
+        # 1. Safety Checks: Open-circuit probe check (ADC 4095).
+        # Alert only on the transition into a fault, not on every telemetry sample.
+        current_soil_fault = bool(data_dict.get("isSoilFault")) or int(data_dict.get("soilMoistureRaw", 0) or 0) >= 4090
+        previous_soil_fault = bool(previous and (previous.get("is_soil_fault") or int(previous.get("soil_moisture_raw") or 0) >= 4090))
+        if current_soil_fault and not previous_soil_fault:
             database.insert_notification(
                 title="Soil Sensor Open-Circuit Detected",
-                message="ADC reported 4095 saturation limit. Open circuit or probe disconnected.",
+                message="Soil sensor reports an invalid/saturated ADC reading. Check its wiring and analog output.",
                 severity="CRITICAL",
                 category="HARDWARE"
             )
-            if data_dict.get("pumpState"):
-                database.queue_command("PUMP_OFF", duration_seconds=0, ttl_seconds=60)
+        if current_soil_fault and data_dict.get("pumpState"):
+            database.queue_command("PUMP_OFF", duration_seconds=0, ttl_seconds=60)
 
-        # 2. Safety Checks: Rain detected while pump is running
+        # 2. Safety Checks: rain inhibit. Null means unknown, never assume dry or wet.
         settings = database.get_all_settings()
         automation_conf = settings.get("automation", {})
         rain_inhibit = automation_conf.get("rainInhibitionEnabled", True)
-        if rain_inhibit and data_dict.get("rainDetected") and data_dict.get("pumpState"):
-            database.insert_notification(
-                title="Rain Inhibit Activated",
-                message="Surface wetness detected during irrigation. Pump shutoff command queued.",
-                severity="WARNING",
-                category="IRRIGATION"
-            )
+        rain_detected = data_dict.get("rainDetected")
+        previous_rain = previous.get("rain_detected") if previous else None
+        if rain_inhibit and rain_detected is True and data_dict.get("pumpState"):
+            # Queue OFF for safety while the pump is reported on, but create a notification
+            # only when transitioning into wet conditions (or when prior state was unknown).
+            if previous_rain is not True:
+                database.insert_notification(
+                    title="Rain Inhibit Activated",
+                    message="Surface wetness detected during irrigation. Pump shutoff command queued.",
+                    severity="WARNING",
+                    category="IRRIGATION"
+                )
             database.queue_command("PUMP_OFF", duration_seconds=0, ttl_seconds=60)
 
         # 3. Authenticated ESP32 claims pending commands (Defect 2)

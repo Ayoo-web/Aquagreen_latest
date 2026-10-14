@@ -111,11 +111,11 @@ def init_db():
             temperature NUMERIC(5, 2) NOT NULL,
             humidity NUMERIC(5, 2) NOT NULL,
             soil_moisture_raw INTEGER NOT NULL,
-            soil_moisture_percent NUMERIC(5, 2) NOT NULL,
+            soil_moisture_percent NUMERIC(5, 2),
             pressure NUMERIC(7, 2) NOT NULL,
-            wind_speed NUMERIC(5, 2) NOT NULL DEFAULT 0.0,
+            wind_speed NUMERIC(5, 2),
             lux NUMERIC(8, 2) NOT NULL DEFAULT 0.0,
-            rain_detected BOOLEAN NOT NULL DEFAULT FALSE,
+            rain_detected BOOLEAN,
             pump_state BOOLEAN NOT NULL DEFAULT FALSE,
             is_soil_fault BOOLEAN NOT NULL DEFAULT FALSE,
             is_simulated BOOLEAN NOT NULL DEFAULT FALSE,
@@ -125,6 +125,11 @@ def init_db():
             collection_tank_distance_cm NUMERIC(7, 2),
             collection_tank_percent NUMERIC(5, 2) CHECK (collection_tank_percent IS NULL OR (collection_tank_percent >= 0 AND collection_tank_percent <= 100)),
             collection_tank_sensor_ok BOOLEAN,
+            soil_sensor_ok BOOLEAN,
+            rain_sensor_ok BOOLEAN,
+            wind_sensor_ok BOOLEAN,
+            wind_raw INTEGER,
+            wind_voltage_v NUMERIC(6,3),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             CONSTRAINT uq_reading_timestamp_source UNIQUE (timestamp, is_simulated)
         );
@@ -136,6 +141,14 @@ def init_db():
         cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS collection_tank_distance_cm NUMERIC(7,2);")
         cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS collection_tank_percent NUMERIC(5,2);")
         cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS collection_tank_sensor_ok BOOLEAN;")
+        cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS soil_sensor_ok BOOLEAN;")
+        cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS rain_sensor_ok BOOLEAN;")
+        cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS wind_sensor_ok BOOLEAN;")
+        cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS wind_raw INTEGER;")
+        cursor.execute("ALTER TABLE readings ADD COLUMN IF NOT EXISTS wind_voltage_v NUMERIC(6,3);")
+        cursor.execute("ALTER TABLE readings ALTER COLUMN soil_moisture_percent DROP NOT NULL;")
+        cursor.execute("ALTER TABLE readings ALTER COLUMN wind_speed DROP NOT NULL;")
+        cursor.execute("ALTER TABLE readings ALTER COLUMN rain_detected DROP NOT NULL;")
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS command_queue (
             id BIGSERIAL PRIMARY KEY,
@@ -195,11 +208,11 @@ def init_db():
             temperature REAL NOT NULL,
             humidity REAL NOT NULL,
             soil_moisture_raw INTEGER NOT NULL,
-            soil_moisture_percent REAL NOT NULL,
+            soil_moisture_percent REAL,
             pressure REAL NOT NULL,
-            wind_speed REAL NOT NULL DEFAULT 0.0,
+            wind_speed REAL,
             lux REAL NOT NULL DEFAULT 0.0,
-            rain_detected INTEGER NOT NULL DEFAULT 0,
+            rain_detected INTEGER,
             pump_state INTEGER NOT NULL DEFAULT 0,
             is_soil_fault INTEGER NOT NULL DEFAULT 0,
             is_simulated INTEGER NOT NULL DEFAULT 0,
@@ -209,6 +222,11 @@ def init_db():
             collection_tank_distance_cm REAL,
             collection_tank_percent REAL,
             collection_tank_sensor_ok INTEGER,
+            soil_sensor_ok INTEGER,
+            rain_sensor_ok INTEGER,
+            wind_sensor_ok INTEGER,
+            wind_raw INTEGER,
+            wind_voltage_v REAL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(timestamp, is_simulated)
         );
@@ -221,11 +239,39 @@ def init_db():
             "ALTER TABLE readings ADD COLUMN collection_tank_distance_cm REAL",
             "ALTER TABLE readings ADD COLUMN collection_tank_percent REAL",
             "ALTER TABLE readings ADD COLUMN collection_tank_sensor_ok INTEGER",
+            "ALTER TABLE readings ADD COLUMN soil_sensor_ok INTEGER",
+            "ALTER TABLE readings ADD COLUMN rain_sensor_ok INTEGER",
+            "ALTER TABLE readings ADD COLUMN wind_sensor_ok INTEGER",
+            "ALTER TABLE readings ADD COLUMN wind_raw INTEGER",
+            "ALTER TABLE readings ADD COLUMN wind_voltage_v REAL",
         ):
             try:
                 cursor.execute(column_sql)
             except Exception:
                 pass  # already present
+        # SQLite cannot DROP NOT NULL in place. If this is an existing legacy DB, rebuild
+        # the readings table to preserve history while allowing null optional measurements.
+        if not is_pg:
+            info = {row[1]: row for row in cursor.execute("PRAGMA table_info(readings)").fetchall()}
+            nullable_fix_needed = any(name in info and int(info[name][3]) == 1 for name in ("soil_moisture_percent", "wind_speed", "rain_detected"))
+            if nullable_fix_needed:
+                cursor.execute("ALTER TABLE readings RENAME TO readings_legacy_nullable_migration")
+                cursor.execute("""CREATE TABLE readings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, temperature REAL NOT NULL,
+                    humidity REAL NOT NULL, soil_moisture_raw INTEGER NOT NULL, soil_moisture_percent REAL,
+                    pressure REAL NOT NULL, wind_speed REAL, lux REAL NOT NULL DEFAULT 0.0, rain_detected INTEGER,
+                    pump_state INTEGER NOT NULL DEFAULT 0, is_soil_fault INTEGER NOT NULL DEFAULT 0,
+                    is_simulated INTEGER NOT NULL DEFAULT 0, supply_tank_distance_cm REAL, supply_tank_percent REAL,
+                    supply_tank_sensor_ok INTEGER, collection_tank_distance_cm REAL, collection_tank_percent REAL,
+                    collection_tank_sensor_ok INTEGER, soil_sensor_ok INTEGER, rain_sensor_ok INTEGER,
+                    wind_sensor_ok INTEGER, wind_raw INTEGER, wind_voltage_v REAL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(timestamp, is_simulated))""")
+                old_cols = {row[1] for row in cursor.execute("PRAGMA table_info(readings_legacy_nullable_migration)").fetchall()}
+                new_cols = ["id","timestamp","temperature","humidity","soil_moisture_raw","soil_moisture_percent","pressure","wind_speed","lux","rain_detected","pump_state","is_soil_fault","is_simulated","supply_tank_distance_cm","supply_tank_percent","supply_tank_sensor_ok","collection_tank_distance_cm","collection_tank_percent","collection_tank_sensor_ok","soil_sensor_ok","rain_sensor_ok","wind_sensor_ok","wind_raw","wind_voltage_v","created_at"]
+                copy_cols = [c for c in new_cols if c in old_cols]
+                cols_sql = ", ".join(copy_cols)
+                cursor.execute(f"INSERT INTO readings ({cols_sql}) SELECT {cols_sql} FROM readings_legacy_nullable_migration")
+                cursor.execute("DROP TABLE readings_legacy_nullable_migration")
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS command_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,9 +400,10 @@ def insert_reading(data: Dict[str, Any]) -> int:
             timestamp, temperature, humidity, soil_moisture_raw, soil_moisture_percent,
             pressure, wind_speed, lux, rain_detected, pump_state, is_soil_fault, is_simulated,
             supply_tank_distance_cm, supply_tank_percent, supply_tank_sensor_ok,
-            collection_tank_distance_cm, collection_tank_percent, collection_tank_sensor_ok
+            collection_tank_distance_cm, collection_tank_percent, collection_tank_sensor_ok,
+            soil_sensor_ok, rain_sensor_ok, wind_sensor_ok, wind_raw, wind_voltage_v
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (timestamp, is_simulated) DO NOTHING
         RETURNING id;
@@ -366,11 +413,11 @@ def insert_reading(data: Dict[str, Any]) -> int:
             float(data.get("temperature", 0.0)),
             float(data.get("humidity", 0.0)),
             int(data.get("soilMoistureRaw", data.get("soil_moisture_raw", 0))),
-            float(data.get("soilMoisturePercent", data.get("soil_moisture_percent", 0.0))),
+            float(data.get("soilMoisturePercent", data.get("soil_moisture_percent"))) if data.get("soilMoisturePercent", data.get("soil_moisture_percent")) is not None else None,
             float(data.get("pressure", 1013.25)),
-            float(data.get("windSpeed", data.get("wind_speed", 0.0))),
+            float(data.get("windSpeed", data.get("wind_speed"))) if data.get("windSpeed", data.get("wind_speed")) is not None else None,
             float(data.get("lux", 0.0)),
-            bool(data.get("rainDetected", data.get("rain_detected", False))),
+            bool(data.get("rainDetected", data.get("rain_detected"))) if data.get("rainDetected", data.get("rain_detected")) is not None else None,
             bool(data.get("pumpState", data.get("pump_state", False))),
             bool(data.get("isSoilFault", data.get("is_soil_fault", False))),
             is_sim,
@@ -379,7 +426,12 @@ def insert_reading(data: Dict[str, Any]) -> int:
             bool(data["supplyTankSensorOk"]) if data.get("supplyTankSensorOk") is not None else None,
             float(data["collectionTankDistanceCm"]) if data.get("collectionTankDistanceCm") is not None else None,
             float(data["collectionTankPercent"]) if data.get("collectionTankPercent") is not None else None,
-            bool(data["collectionTankSensorOk"]) if data.get("collectionTankSensorOk") is not None else None
+            bool(data["collectionTankSensorOk"]) if data.get("collectionTankSensorOk") is not None else None,
+            bool(data["soilSensorOk"]) if data.get("soilSensorOk") is not None else None,
+            bool(data["rainSensorOk"]) if data.get("rainSensorOk") is not None else None,
+            bool(data["windSensorOk"]) if data.get("windSensorOk") is not None else None,
+            int(data["windRaw"]) if data.get("windRaw") is not None else None,
+            float(data["windVoltageV"]) if data.get("windVoltageV") is not None else None
         ))
         row = cursor.fetchone()
         row_id = row[0] if row else 0
@@ -389,9 +441,10 @@ def insert_reading(data: Dict[str, Any]) -> int:
             timestamp, temperature, humidity, soil_moisture_raw, soil_moisture_percent,
             pressure, wind_speed, lux, rain_detected, pump_state, is_soil_fault, is_simulated,
             supply_tank_distance_cm, supply_tank_percent, supply_tank_sensor_ok,
-            collection_tank_distance_cm, collection_tank_percent, collection_tank_sensor_ok
+            collection_tank_distance_cm, collection_tank_percent, collection_tank_sensor_ok,
+            soil_sensor_ok, rain_sensor_ok, wind_sensor_ok, wind_raw, wind_voltage_v
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         );
         """
         cursor.execute(query, (
@@ -399,11 +452,11 @@ def insert_reading(data: Dict[str, Any]) -> int:
             float(data.get("temperature", 0.0)),
             float(data.get("humidity", 0.0)),
             int(data.get("soilMoistureRaw", data.get("soil_moisture_raw", 0))),
-            float(data.get("soilMoisturePercent", data.get("soil_moisture_percent", 0.0))),
+            float(data.get("soilMoisturePercent", data.get("soil_moisture_percent"))) if data.get("soilMoisturePercent", data.get("soil_moisture_percent")) is not None else None,
             float(data.get("pressure", 1013.25)),
-            float(data.get("windSpeed", data.get("wind_speed", 0.0))),
+            float(data.get("windSpeed", data.get("wind_speed"))) if data.get("windSpeed", data.get("wind_speed")) is not None else None,
             float(data.get("lux", 0.0)),
-            1 if data.get("rainDetected", data.get("rain_detected", False)) else 0,
+            (1 if data.get("rainDetected", data.get("rain_detected")) else 0) if data.get("rainDetected", data.get("rain_detected")) is not None else None,
             1 if data.get("pumpState", data.get("pump_state", False)) else 0,
             1 if data.get("isSoilFault", data.get("is_soil_fault", False)) else 0,
             1 if is_sim else 0,
@@ -412,7 +465,12 @@ def insert_reading(data: Dict[str, Any]) -> int:
             (1 if data["supplyTankSensorOk"] else 0) if data.get("supplyTankSensorOk") is not None else None,
             float(data["collectionTankDistanceCm"]) if data.get("collectionTankDistanceCm") is not None else None,
             float(data["collectionTankPercent"]) if data.get("collectionTankPercent") is not None else None,
-            (1 if data["collectionTankSensorOk"] else 0) if data.get("collectionTankSensorOk") is not None else None
+            (1 if data["collectionTankSensorOk"] else 0) if data.get("collectionTankSensorOk") is not None else None,
+            (1 if data["soilSensorOk"] else 0) if data.get("soilSensorOk") is not None else None,
+            (1 if data["rainSensorOk"] else 0) if data.get("rainSensorOk") is not None else None,
+            (1 if data["windSensorOk"] else 0) if data.get("windSensorOk") is not None else None,
+            int(data["windRaw"]) if data.get("windRaw") is not None else None,
+            float(data["windVoltageV"]) if data.get("windVoltageV") is not None else None
         ))
         row_id = cursor.lastrowid or 0
 

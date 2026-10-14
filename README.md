@@ -1,5 +1,10 @@
 # AquaGreen Smart Irrigation Monitoring and Automation System
 
+## Partial sensor telemetry (wind sensor temporarily unavailable)
+
+The current firmware uploads valid climate and tank readings even when soil, rain, or wind values are uncalibrated. These fields are sent as JSON `null`, with `soilSensorOk`, `rainSensorOk`, and `windSensorOk` flags; no placeholder zero readings are substituted. Before deploying this revision to the existing Supabase project, run `database/migration_nullable_sensor_readings.sql` in Supabase SQL Editor, then deploy the code and upload `firmware/sensor_ayaw_hilabti_updated.ino` to the ESP32. If wind data is unavailable, FAO-56 output is withheld rather than using a fabricated wind-speed default. Local pump interlocks still require valid soil/rain readings.
+
+
 AquaGreen is an empirical, research-grade smart irrigation automation system designed for agricultural research studies. It implements the standardized **FAO-56 Penman–Monteith reference evapotranspiration equation**, interfaces directly with physical ESP32 multi-sensor telemetry, and guarantees non-blocking autonomous relay safety during network interruptions.
 
 ---
