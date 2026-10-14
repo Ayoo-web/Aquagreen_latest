@@ -1,0 +1,6 @@
+{
+  "name": "AquaGreen Smart Irrigation System",
+  "description": "Smart irrigation monitoring and automation system using FAO-56 Penman-Monteith evapotranspiration, ESP32 telemetry, and fail-safe controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
