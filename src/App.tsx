@@ -367,15 +367,6 @@ export default function App() {
               <Database className="w-3.5 h-3.5 text-slate-400" />
               Storage: <span className="font-semibold text-slate-700">{backendStatus.database}</span>
             </span>
-            {latestReading && (
-              <span className="hidden sm:inline">
-                Telemetry: {latestReading.isSimulated ? (
-                  <span className="text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded">SIMULATOR MODE</span>
-                ) : (
-                  <span className="text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded">PHYSICAL ESP32</span>
-                )}
-              </span>
-            )}
           </div>
 
           <div className="flex items-center gap-3">
